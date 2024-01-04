@@ -26,7 +26,7 @@ class FedServer:
         self.freq = freq
         self.args = args
         self.testloader = testloader
-        self.weight = {key: value for key, value in model.state_dict().items()}
+        self.weight = {key: value.flatten().cpu() for key, value in model.state_dict().items()}
 
     def aggregate(self, weights):
         self.aggregator.aggregate(weights, self.freq)
@@ -34,6 +34,8 @@ class FedServer:
     def aggregate_updates(self, updates):
         update = self.aggregator.aggregate_update(updates, self.freq)
         for key in update.keys():
+            print(f"Type of weight[{key}]: {type(self.weight[key])}")
+            print(f"Type of update[{key}]: {type(update[key])}")
             self.weight[key] += update[key]
         return self.weight
 
@@ -100,28 +102,25 @@ class FedClient:
         self.update = {key: newer[key] - older[key] for key in older.keys()}
 
     def get_weights(self):
+        weight = {key: value.flatten() for key, value in self.model.state_dict().items()}
         if self.protector is None:
-            return self.model.state_dict()
+            return weight
         else:
-            return self.protector(self.model.state_dict())
+            return self.protector(weight)
 
     def set_weights(self, weights: dict):
         if self.protector is not None and hasattr(self.protector, 'recover'):
             weights = self.protector.recover(weights)
+        weights = {key: value.reshape(self.model.state_dict()[key].shape) for key, value in weights.items()}
         self.model.load_state_dict(weights)
 
     def get_update(self):
+        update = {key: value.flatten() for key, value in self.update.items()}
         if self.protector is None:
-            return self.update
+            return update
         else:
-            return self.protector(self.update)
+            return self.protector(update)
         
-    # def apply_update(self, update):
-    #     if self.protector is not None:
-    #         update = self.protector.recover(update)
-        
-    #     newer = {key: self.prev[key] + update[key] for key in update.keys()}
-    #     self.model.load_state_dict(newer)
         
     def log_test(self, round):
         loss, acc = self.test()

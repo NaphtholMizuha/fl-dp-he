@@ -2,7 +2,7 @@ import math
 import tenseal as ts
 from abc import ABC, abstractmethod
 from math import sqrt
-
+import contextlib
 import torch
 device = 'cuda'
 
@@ -66,11 +66,12 @@ class CkksHe():
         return torch.tensor(plain.raw).reshape(plain.shape)
         
     def protect(self, data):
-        self.shapes = {key: value.shape for key, value in data.items()}
-        return {key: ts.ckks_vector(self.ctx, value.flatten().cpu()) for key, value in data.items()}
+        with contextlib.redirect_stdout(None):
+            enc = {key: ts.ckks_vector(self.ctx, value.cpu()) for key, value in data.items()}
+        return 
     
     def recover(self, data):
-        return {key: torch.tensor(value.decrypt()).reshape(self.shapes[key]).to(device) for key, value in data.items()}
+        return {key: torch.tensor(value.decrypt()).to(device) for key, value in data.items()}
     
     def __call__(self, weight):
         return self.protect(weight)

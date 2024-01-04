@@ -172,7 +172,7 @@ if __name__ == "__main__":
         loss_rec.append(loss_li)
 
 
-    acc_df = pd.DataFrame(acc_rec);
+    acc_df = pd.DataFrame(acc_rec)
     loss_df = pd.DataFrame(loss_rec)
     acc_df.to_csv("./results/acc.csv")
     loss_df.to_csv("./results/loss.csv")
