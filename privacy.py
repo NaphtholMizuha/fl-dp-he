@@ -66,10 +66,11 @@ class CkksHe():
         return torch.tensor(plain.raw).reshape(plain.shape)
         
     def protect(self, data):
-        return {key: ts.ckks_vector(self.ctx, value.cpu()) for key, value in data.items()}
+        self.shapes = {key: value.shape for key, value in data.items()}
+        return {key: ts.ckks_vector(self.ctx, value.flatten().cpu()) for key, value in data.items()}
     
     def recover(self, data):
-        return {key: self.ckks_to_torch(self.ctx, value) for key, value in data.items()}
+        return {key: torch.tensor(value.decrypt()).reshape(self.shapes[key]).to(device) for key, value in data.items()}
     
     def __call__(self, weight):
         return self.protect(weight)
