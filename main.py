@@ -1,33 +1,26 @@
+import math
 import pandas as pd
 import torch
-from matplotlib import pyplot as plt
-from matplotlib.ticker import MaxNLocator
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import tenseal as ts
-from aggregator import Aggregator
+from aggregator import Aggregator, SplitAggregator
 from frameworks import FedClient, FedServer
 from models import SimpleCnn
 from partitioner import DataPartitioner
-from privacy import CkksHe, CkksDp, VanillaDp
+from privacy import Ckks, CkksDp, VanillaDp, Paillier
 from trainer import Trainer, ExpectationBasedTrainer
 from torch import nn
 import time
 from colorama import Fore, Style
+import os
+from utils import plot_contrast, bar_chart
+from ipcl_python import PaillierKeypair
+import utils
 
 device = 'cuda'
+os.environ["CUDA_VISIBLE_DEVICES"]= "0,1"
 
-# TODO: 将整个学习流程包装成函数，有上传模型和上传更新两个版本
-
-def plot_contrast(title, data, labels):
-    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
-    plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
-    for i, datum in enumerate(data):
-        plt.plot(datum, color=colors[i], label=labels[i], marker='.')
-        plt.legend()
-        plt.title(title)
-    plt.savefig(f'./{title}.png')
-    plt.close()
 
 if __name__ == "__main__":
     n_client = 10
@@ -96,11 +89,15 @@ if __name__ == "__main__":
 
     dp_list = [VanillaDp(dp_args[i]) for i in range(n_client)]
     
-    ckks = CkksHe(context)
-    ckks_dp = [CkksDp(context, [0], dp_args[i]) for i in range(n_client)]
+    ckks = Ckks(context)
+    pk, sk = PaillierKeypair.generate_keypair(1024)
+    paillier = Paillier(pk, sk)
+    he_idcs = torch.load('./results/top_k_idcs_cpu.pt')
+    ckks_dp = [CkksDp(context, he_idcs, dp_args[i]) for i in range(n_client)]
     
-    titles = ['baseline']
-    acc_rec, loss_rec = [], []
+    # titles = ['he', 'dp', 'he-dp', 'baseline']
+    titles = ['dp', 'baseline', 'he']
+    acc_rec, loss_rec, time_rec = [], [], []
 
     for lab in titles:
         FedClient.count = 0
@@ -141,13 +138,13 @@ if __name__ == "__main__":
                 dp_list[i]
             ) for i in range(n_client)]
         elif lab == 'he':
+            global_weight = paillier(global_weight)
             server = FedServer(
-                global_model,
-                Aggregator(global_model),
+                Aggregator(),
                 partition.freq,
                 'cpu',
+                global_weight,
                 {},
-                testloader
             )
             clients = [FedClient(
                 local_models[i],
@@ -159,17 +156,10 @@ if __name__ == "__main__":
                 ),
                 {'epoch': n_epoch, 'test': False, 'log': False},
                 testloader,
-                ckks
+                paillier
             ) for i in range(n_client)]
         elif lab == 'he-dp':
-            server = FedServer(
-                global_model,
-                Aggregator(global_model),
-                partition.freq,
-                'cpu',
-                {},
-                testloader
-            )
+
             clients = [FedClient(
                 local_models[i],
                 Trainer(
@@ -178,10 +168,24 @@ if __name__ == "__main__":
                     nn.CrossEntropyLoss().to(device),
                     {'lr': lr}
                 ),
-                {'epoch': n_epoch, 'test': False, 'log': True},
+                {'epoch': n_epoch, 'test': False, 'log': False},
                 testloader,
                 ckks_dp[i]
             ) for i in range(n_client)]
+
+            he_weight = {}
+            for key, value in global_weight.items():
+                he_weight[key] = value.to('cpu')[he_idcs[key]]
+            dp_weight = global_weight
+            global_weight = (he_weight, dp_weight)
+
+            server = FedServer(
+            SplitAggregator(),
+            partition.freq,
+            'cuda',
+            global_weight,
+            {},
+        )
 
 
         loss_li, acc_li = [], []
@@ -190,7 +194,9 @@ if __name__ == "__main__":
             updates = {}
             for client in clients:
                 client.train_update()
-                updates[client.id] = client.get_update()
+                update = client.get_update()
+                updates[client.id] = update
+                
             w_glob = server.aggregate_updates(updates)
 
 
@@ -203,12 +209,17 @@ if __name__ == "__main__":
 
         acc_rec.append(acc_li)
         loss_rec.append(loss_li)
-        print(f"{Fore.MAGENTA}Experiment: {lab}, Time: {time.time() - start_time} seconds{Style.RESET_ALL}")
+        time_ = time.time() - start_time
+        print(f"{Fore.MAGENTA}Experiment: {lab}, Time: {time_} seconds{Style.RESET_ALL}")
+        time_rec.append(time_)
 
     acc_df = pd.DataFrame(acc_rec)
     loss_df = pd.DataFrame(loss_rec)
+    time_df = pd.DataFrame(time_rec)
     acc_df.to_csv("./results/acc.csv")
     loss_df.to_csv("./results/loss.csv")
+    time_df.to_csv("./results/time.csv")
 
     plot_contrast("Accuracy", acc_rec, titles)
     plot_contrast("Loss", loss_rec, titles)
+    bar_chart("Time", time_rec, titles)

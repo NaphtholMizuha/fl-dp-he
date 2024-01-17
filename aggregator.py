@@ -1,5 +1,6 @@
 from torch import nn
-
+import torch
+import math
 class Aggregator:
 
     def aggregate(self, weights: dict, freq: dict):
@@ -28,8 +29,11 @@ class Aggregator:
     
 class SplitAggregator:
 
-    def aggregate_update(self, updates: tuple[dict, dict], freq: dict):
-        he_update, dp_update = updates
+    def aggregate_update(self, updates: dict[tuple[dict, dict]], freq: dict):
+        he_update, dp_update = {}, {}
+        for key, value in updates.items():
+            he_update[key] = value[0]
+            dp_update[key] = value[1]
         glob_he_update, glob_dp_update = {}, {}
 
         for client, update in he_update.items():

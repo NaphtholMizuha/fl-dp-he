@@ -34,9 +34,15 @@ class FedServer:
         
     def aggregate_updates(self, updates):
         update = self.aggregator.aggregate_update(updates, self.freq)
-        for key in update.keys():
-            self.weight[key] += update[key]
-        return self.weight
+        if isinstance(update, tuple):
+            for key in update[0].keys():
+                self.weight[0][key] += update[0][key]
+                self.weight[1][key] += update[1][key]
+            return self.weight
+        else:
+            for key in update.keys():
+                self.weight[key] += update[key]
+            return self.weight
 
 class FedClient:
     count = 0

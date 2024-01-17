@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 from math import sqrt
 import contextlib
 import torch
-from lightphe import LightPHE
+from utils import SparseVector
 import io
-device = 'cpu'
+device = 'cuda'
 
 class BaseProtector(ABC):
     @abstractmethod
@@ -66,13 +66,12 @@ class RenyiDp(BaseDp):
             std[key] = sensitivity * sqrt(self.alpha / (2 * self.epsilon))
         return std
 
-class CkksHe():
+class Ckks():
     def __init__(self, ctx: ts.Context):
         self.ctx = ctx
         
-    def ckks_to_torch(cipher: ts.CKKSTensor):
-        plain = cipher.decrypt()
-        return torch.tensor(plain.raw).reshape(plain.shape)
+    def ckks_to_torch(cipher: ts.CKKSTensor): 
+        return cipher.decrypt()
         
     def protect(self, data):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -85,34 +84,74 @@ class CkksHe():
     def __call__(self, weight):
         return self.protect(weight)
 
-class PaillierHe():
-    def __init__(self):
-        self.cs = LightPHE(algorithm_name='Paillier')
+class Paillier():
+    def __init__(self, pk, sk):
+        self.pk = pk
+        self.sk = sk
 
     def protect(self, data):
-        encrypted_data = {key: self.cs.encrypt(value.cpu().tolist()) for key, value in data.items()}
+        encrypted_data = {key: self.pk.encrypt(value.cpu().numpy()) for key, value in data.items()}
         return encrypted_data
 
     def recover(self, data):
-        decrypted_data = {key: torch.tensor(self.cs.decrypt(value)).to(device) for key, value in data.items()}
+        decrypted_data = {key: torch.tensor(self.sk.decrypt(value)).to(device) for key, value in data.items()}
         return decrypted_data
 
     def __call__(self, weight):
         return self.protect(weight)
+    
+class PaillierDp:
+    def __init__(self, pk, sk, he_idcs: dict, args: {}) -> None:
+        self.paillier = Paillier(pk, sk)
+        self.dp = VanillaDp(args)
+        self.he_idcs = he_idcs
+
+    def split(self, data: dict[str, torch.Tensor]):
+        he_data, dp_data = {}, {}
+        for key, value in data.items():
+            he_data[key] = value[self.he_idcs[key]]
+            dp_data[key] = value.to(device)
+        return he_data, dp_data
+    
+    def recover(self, data):
+        he_data, dp_data = data
+        he_data = self.paillier.recover(he_data)
+        data = {}
+        for key in he_data.keys():
+            data[key] = dp_data[key]
+            data[key][self.he_idcs[key]] = he_data[key].to(device)
+        return data
+    
+    def protect(self, data: dict[str, torch.Tensor]):
+        he_data, dp_data = self.split(data)
+        he_data = self.paillier(he_data)
+        dp_data = self.dp(dp_data)
+        return he_data, dp_data
+    
+    def __call__(self, weight):
+        return self.protect(weight)
 
 class CkksDp:
-    def __init__(self, context: ts.Context, he_indcs: dict, args: {}) -> None:
-        self.ckks = CkksHe(context)
+    def __init__(self, context: ts.Context, he_idcs: dict, args: {}) -> None:
+        self.ckks = Ckks(context)
         self.dp = VanillaDp(args)
-        self.he_indcs = he_indcs
+        self.he_idcs = he_idcs
 
     def split(self, data: dict[str, torch.Tensor]):
         ckks_data, dp_data = {}, {}
         for key, value in data.items():
-            other_idcs = [i for i in range(value.shape[0]) if i not in self.he_indcs[key]]
-            ckks_data[key] = value[self.he_indcs[key]]
-            dp_data[key] = value[other_idcs]
+            ckks_data[key] = value[self.he_idcs[key]]
+            dp_data[key] = value.to(device)
         return ckks_data, dp_data
+    
+    def recover(self, data):
+        he_data, dp_data = data
+        he_data = self.ckks.recover(he_data)
+        data = {}
+        for key in he_data.keys():
+            data[key] = dp_data[key]
+            data[key][self.he_idcs[key]] = he_data[key].to(device)
+        return data
     
     def protect(self, data: dict[str, torch.Tensor]):
         ckks_data, dp_data = self.split(data)
