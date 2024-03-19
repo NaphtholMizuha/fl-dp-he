@@ -2,6 +2,8 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import torch
 
+cmap = plt.cm.get_cmap('tab10')
+
 class SparseVector:
     def __init__(self, data):
         self.data = {i: val for i, val in enumerate(data) if val != 0}
@@ -39,34 +41,23 @@ class SparseVector:
 
 
 def plot_contrast(title, data, labels):
-    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     for i, datum in enumerate(data):
-        plt.plot(datum, color=colors[i], label=labels[i], marker='.')
+        plt.plot(datum, color=cmap(i), label=labels[i], marker='.')
         plt.legend()
     plt.title(title)
     plt.savefig(f'./results/{title}.png')
     plt.close()
 
 def bar_chart(title, data, labels, path='./results/'):
-    plt.bar(labels, data)
+    plt.bar(labels, data, color=[cmap(i % cmap.N) for i in range(len(data))])
     plt.title(title)
     plt.savefig(f'./results/{title}.png')
     plt.close()
-    
-def histogram(title, data):
-    plt.hist(data, bins=20)
-    plt.title(title)
-    plt.savefig(f'./results/{title}.png')
-    plt.close()
+
     
 def top_k_idcs(data: torch.Tensor, k: int):
     return torch.argsort(data, descending=True)[:k]
 
-def series_top_k_idcs(data: list[torch.Tensor], key, round):
-    # make the list of tensors into a tensor
-    data = torch.concatenate(data)
-
-    counts = torch.bincount(data)
-    counts_sorted, indices_sorted = torch.sort(counts, descending=True)
-    bar_chart(f'Round {round}: {key}' ,counts_sorted.to('cpu'), indices_sorted.to('cpu'), path='./results/topk')
+def get_top_k_idcs(data: torch.Tensor, k: int):
+    return torch.argsort(data, descending=True)[:k]

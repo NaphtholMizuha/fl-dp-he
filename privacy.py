@@ -101,7 +101,7 @@ class Paillier():
         return self.protect(weight)
     
 class PaillierDp:
-    def __init__(self, pk, sk, he_idcs: dict, args: {}) -> None:
+    def __init__(self, pk, sk, he_idcs: dict, args: dict={}) -> None:
         self.paillier = Paillier(pk, sk)
         self.dp = VanillaDp(args)
         self.he_idcs = he_idcs
@@ -110,6 +110,7 @@ class PaillierDp:
         he_data, dp_data = {}, {}
         for key, value in data.items():
             he_data[key] = value[self.he_idcs[key]]
+            value[self.he_idcs[key]] = 0
             dp_data[key] = value.to(device)
         return he_data, dp_data
     
@@ -132,7 +133,7 @@ class PaillierDp:
         return self.protect(weight)
 
 class CkksDp:
-    def __init__(self, context: ts.Context, he_idcs: dict, args: {}) -> None:
+    def __init__(self, context: ts.Context, he_idcs: dict, args: dict) -> None:
         self.ckks = Ckks(context)
         self.dp = VanillaDp(args)
         self.he_idcs = he_idcs

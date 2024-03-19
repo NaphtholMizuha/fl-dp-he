@@ -1,18 +1,11 @@
+import matplotlib.pyplot as plt
 import numpy as np
 
-# 创建一个 numpy 向量
-data = np.array([1, 2, 2, 3, 3, 3, 4, 4, 4, 4])
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
 
-# 使用 bincount() 函数统计值的出现次数
-counts = np.bincount(data)
-
-# 获取排序的索引
-sorted_indices = np.argsort(counts)
-
-# 反转索引数组以实现降序排序
-sorted_indices = sorted_indices[::-1]
-
-# 输出排序后的值和它们的出现次数
-for i in sorted_indices:
-    if counts[i] > 0:
-        print(f"Value: {i}, Count: {counts[i]}")
+plt.plot(x, y)
+plt.title(r'$\sin(x)$')  # 使用 LaTeX 语法在标题中输入数学符号
+plt.xlabel(r'$x$')  # 使用 LaTeX 语法在 x 轴标签中输入数学符号
+plt.ylabel(r'$y$')  # 使用 LaTeX 语法在 y 轴标签中输入数学符号
+plt.savefig('sin.png')

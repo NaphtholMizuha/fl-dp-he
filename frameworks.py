@@ -1,5 +1,6 @@
 import copy
-
+import math
+from utils import get_top_k_idcs, top_k_idcs
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -82,6 +83,12 @@ class FedClient:
         newer = self.model.state_dict()
         self.prev = older
         self.update = {key: newer[key] - older[key] for key in older.keys()}
+        
+    def get_raw_update(self):
+        result = {}
+        for key, value in self.update.items():
+            result[key] = value.flatten()
+        return result
 
     def get_weights(self):
         weight = {key: value.flatten() for key, value in self.model.state_dict().items()}
@@ -89,6 +96,23 @@ class FedClient:
             return weight
         else:
             return self.protector(weight)
+        
+    def apply_updates(self, updates:dict, replace_idcs=False, he_frac=0.1):
+        state = self.prev
+        if self.protector is not None and hasattr(self.protector, 'recover'):
+            updates = self.protector.recover(updates)
+            
+        if replace_idcs:
+            tops = {}
+            for key, value in updates.items():
+                tops[key] = get_top_k_idcs(value, math.ceil(he_frac * len(value)))
+            
+        updates = {
+            key: value.reshape(state[key].shape) + state[key]
+            for key, value in updates.items()
+        }
+        self.model.load_state_dict(updates)
+        
 
     def set_weights(self, weights: dict):
         if self.protector is not None and hasattr(self.protector, 'recover'):
@@ -106,7 +130,7 @@ class FedClient:
         
     def log_test(self, round):
         loss, acc = self.test()
-        logger.success(f"Server Round {round}: loss={loss:.3f}, acc={acc * 100:.2f}%")
+        logger.info(f"Server Round {round}: loss={loss:.3f}, acc={acc * 100:.2f}%")
         return loss, acc
 
     def test(self):
