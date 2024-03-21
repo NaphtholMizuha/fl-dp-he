@@ -97,7 +97,7 @@ class Experiment:
             init_model = model_select(self.model_name).to(device)
             
             if self.clip is None:
-                self.clip = {key: 1 for key in init_model.state_dict().keys()}
+                self.clip = {key: 0.01 for key in init_model.state_dict().keys()}
                 
             w_init = {key: value.flatten() for key, value in init_model.state_dict().items()}
             for rate in rates:
