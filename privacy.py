@@ -21,6 +21,9 @@ class BaseDp():
     def clip(self, weight):
         clipped = {}
         for key, value in weight.items():
+            if "weight" not in key and "bias" not in key:
+                clipped[key] = value
+                continue
             clipped[key] = value / max(torch.norm(value) / self.clip_thr[key], 1)
         return clipped
 
@@ -28,6 +31,8 @@ class BaseDp():
         weight = self.clip(weight)
         for key in weight.keys():
             shape = weight[key].shape
+            if "weight" not in key and "bias" not in key:
+                continue
             weight[key] += torch.randn(shape).to(device) * self.std[key]
         return weight
 
@@ -110,7 +115,6 @@ class PaillierDp:
         he_data, dp_data = {}, {}
         for key, value in data.items():
             he_data[key] = value[self.he_idcs[key]]
-            value[self.he_idcs[key]] = 0
             dp_data[key] = value.to(device)
         return he_data, dp_data
     
@@ -143,6 +147,7 @@ class CkksDp:
         for key, value in data.items():
             ckks_data[key] = value[self.he_idcs[key]]
             dp_data[key] = value.to(device)
+            dp_data[key][self.he_idcs[key]] = 0
         return ckks_data, dp_data
     
     def recover(self, data):

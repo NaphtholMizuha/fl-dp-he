@@ -40,13 +40,14 @@ class SparseVector:
         return result
 
 
-def plot_contrast(title, data, labels):
+def plot_contrast(title, filename, data, labels):
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     for i, datum in enumerate(data):
-        plt.plot(datum, color=cmap(i), label=labels[i], marker='.')
+        plt.plot(datum, color=cmap(i), label=labels[i])
         plt.legend()
     plt.title(title)
-    plt.savefig(f'./results/{title}.png')
+    plt.grid(True)
+    plt.savefig(f'./results/{filename + title}.png')
     plt.close()
 
 def bar_chart(title, data, labels, path='./results/'):
@@ -61,3 +62,9 @@ def top_k_idcs(data: torch.Tensor, k: int):
 
 def get_top_k_idcs(data: torch.Tensor, k: int):
     return torch.argsort(data, descending=True)[:k]
+
+def get_bottom_k_idcs(data: torch.Tensor, k: int):
+    return torch.topk(data, k, largest=False)[1]
+
+def get_bottom_k_norm(data: torch.Tensor, k: int):
+    return torch.topk(data, k, largest=False)[0].norm()
