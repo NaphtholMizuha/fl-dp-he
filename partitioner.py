@@ -17,12 +17,16 @@ class DataPartitioner:
             partition_dict = self.iid_partition()
         elif self.partition == "dirichlet":
             partition_dict = self.dirichlet_partition()
+        elif self.partition == "pathetic":
+            partition_dict = self.pathetic_partition()
+        elif self.partition == "load":
+            partition_dict = np.load(self.args['load'], allow_pickle=True).item()
 
         self.freq = {i: len(partition_dict[i]) / len(self.dataset) for i in range(n_client)}
         self.dataloaders = self.split(partition_dict)
-
-        if self.args['show'] :
-            self.show_distribution(partition_dict)
+            
+        if self.args.get('save') is not None:
+            np.save(self.args['save'], partition_dict)
 
 
 
@@ -32,6 +36,12 @@ class DataPartitioner:
         indices = np.split(indices, self.n_client)
 
         return {i : indices[i] for i in range(self.n_client)}
+    
+    def pathetic_partition(self):
+        partition_dict = {i : [] for i in range(self.n_client)}
+        for i, (_, y) in enumerate(self.dataset):
+            partition_dict[y % self.n_client].append(i)
+        return partition_dict
 
 
     def dirichlet_partition(self):
@@ -65,7 +75,7 @@ class DataPartitioner:
             shuffle=True
         ) for i in range(self.n_client)}
 
-    def show_distribution(self, partition_dict: dict):
+    def show_distribution(self, partition_dict: dict, path):
         mat = np.zeros([self.n_client, self.n_class])
         for client, indices in partition_dict.items():
             for idx in indices:
@@ -78,7 +88,7 @@ class DataPartitioner:
         plt.ylabel('Class')
         plt.title("Distribution")
         plt.colorbar()
-        plt.savefig('./results/dist.png')
+        plt.savefig(path)
         plt.close()
 
     def __getitem__(self, item) -> DataLoader:

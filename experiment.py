@@ -1,9 +1,10 @@
 import math
 import os
 import random
+import time
 import numpy as np
 import torch
-from datasets import Datasets
+from datasets import Datasets, num_classes
 from utils import get_bottom_k_idcs, get_top_k_idcs, get_bottom_k_norm
 from partitioner import DataPartitioner
 from ipcl_python import PaillierKeypair
@@ -42,156 +43,57 @@ class Experiment:
         'layer3.weight': 1,
         'layer3.bias': 1
     }
-    def __init__(self,
-                    dataset_name: str, model_name: str,
-                    n_client: int=10,
-                    n_round: int=30,
-                    n_epoch: int=3,
-                    epsilon: float=0.1,
-                    delta: float=1e-5,
-                    clip: dict=None,
-                    lr: float=0.01) -> None:
-        self.dataset_name = dataset_name
-        self.model_name = model_name
-        self.n_client = n_client
-        self.n_round = n_round
-        self.n_epoch = n_epoch
-        self.epsilon = epsilon
-        self.delta = delta
-        self.lr = lr
+    def __init__(self, args):
+        self.dataset_name = args.data
+        self.model_name = args.model
+        self.n_client = args.clients
+        self.n_round = args.rounds
+        self.n_epoch = args.epochs
+        self.epsilon = args.epsilon
+        self.delta = args.delta
+        self.lr = args.lr
+        self.log_client = args.log_client
+        self.test_client = args.test_client
+        self.args = args
+        if self.clip_default.get(self.model_name) is not None:
+            self.clip = self.clip_default[self.model_name]
+            
+    def run_by_clips(self, clips: list, repeat: int):
+        loss_rec, acc_rec, time_rec = [], [], []
+        rate = 0.1
         
-        if clip is None and self.clip_default.get(model_name) is not None:
-            self.clip = self.clip_default[model_name]
-        else:
-            self.clip = clip
-        pass
-    
-    def run_by_rates(self, rates: list):
-            results = {}
-            loss_rec, acc_rec = [], []
-            # set up the experiment
-            dataset = Datasets(self.dataset_name)
-            n_client = self.n_client
-            n_round = self.n_round
-            n_epoch = self.n_epoch
-            privacy_budget = self.epsilon
-            privacy_relax = self.delta
-            lr = self.lr
-            # HE rates: 0 for all DP, 1 for all HE, and other values for mixed
-
-            # partition the dataset
-
+        
+        dataset = Datasets(self.dataset_name)
+        
+        
+        if os.path.exists(f"./temp/{self.dataset_name}-{repeat}.npy"):
             partition = DataPartitioner(
                 dataset.train,
-                'dirichlet',
-                n_client,
-                {'show': True, 'alpha': 0.5, 'batch_size': 64, 'num_workers': 2}
+                'load',
+                self.n_client,
+                {'show': False, 'alpha': self.args.alpha, 'batch_size': 64, 'num_workers': 2, 'load': f"./temp/{self.dataset_name}-{repeat}.npy"}
             )
-            testloader = DataLoader(dataset.test, batch_size=64)
-            
-
-            # set up the arguments for the homomorphic encryption
-            pk, sk = PaillierKeypair.generate_keypair(1024)
-            paillier = Paillier(pk, sk)
-            
-            init_model = model_select(self.model_name).to(device)
-            
-            if self.clip is None:
-                self.clip = {key: 0.01 for key in init_model.state_dict().keys()}
-                
-            w_init = {key: value.flatten() for key, value in init_model.state_dict().items()}
-            for rate in rates:
-                FedClient.count = 0
-                logger.debug(f"Start the experiment at HE rates {rate*100}%")
-                # create models and initialize loacl models with global model
-                local_models = [model_select(self.model_name).to(device) for _ in range(n_client)]
-                for model in local_models:
-                    model.load_state_dict(init_model.state_dict())
-                    
-                if rate != 1:
-                    dp_args = [{
-                        'n_aggr': n_round,
-                        'n_dataset': len(partition[i].dataset),
-                        'epsilon': privacy_budget,
-                        'delta': privacy_relax,
-                        'clip_thr': self.clip,
-                    } for i in range(n_client)]
-                    dp_list = [VanillaDp(dp_args[i]) for i in range(n_client)]
-                    paillier_dp = [PaillierDp(pk, sk, None, dp_args[i]) for i in range(n_client)]
-                
-                # create clients by HE rates
-                if rate == 0:
-                    clients = [FedClient(
-                        local_models[i],
-                        Trainer(
-                            local_models[i],
-                            partition[i],
-                            nn.CrossEntropyLoss().to(device),
-                            {'lr': lr}
-                        ),
-                        {'epoch': n_epoch, 'test': False, 'log': False},
-                        testloader,
-                        dp_list[i]
-                    ) for i in range(n_client)]
-                elif rate == 1:
-                    w_init = paillier(w_init)
-                    clients = [FedClient(
-                        local_models[i],
-                        Trainer(
-                            local_models[i],
-                            partition[i],
-                            nn.CrossEntropyLoss().to(device),
-                            {'lr': lr}
-                        ),
-                        {'epoch': n_epoch, 'test': False, 'log': False},
-                        testloader,
-                        paillier
-                    ) for i in range(n_client)]
-                else:
-                    clients = [FedClient(
-                        local_models[i],
-                        Trainer(
-                            local_models[i],
-                            partition[i],
-                            nn.CrossEntropyLoss().to(device),
-                            {'lr': lr}
-                        ),
-                        {'epoch': n_epoch, 'test': False, 'log': False},
-                        testloader,
-                        paillier_dp[i]
-                    ) for i in range(n_client)]
-                    
-                loss, acc = fed_train(clients, n_round, rate, w_init, partition.freq)
-                loss_rec.append(loss), acc_rec.append(acc)
-            return loss_rec, acc_rec
-        
-    def run_by_basis(self, basis: list, rate: float):
-        results = {}
-        loss_rec, acc_rec = [], []
-        # set up the experiment
-        dataset = Datasets(self.dataset_name)
-
-        partition = DataPartitioner(
-            dataset.train,
-            'dirichlet',
-            self.n_client,
-            {'show': True, 'alpha': 0.5, 'batch_size': 64, 'num_workers': 2}
-        )
-
+        else:
+            partition = DataPartitioner(
+                dataset.train,
+                self.args.partition,
+                self.n_client,
+                {'show': False, 'alpha': self.args.alpha, 'batch_size': 64, 'num_workers': 2, 'save': f"./temp/{self.dataset_name}-{repeat}.npy"}
+            )
         testloader = DataLoader(dataset.test, batch_size=64)
-            
-        
-        # set up the arguments for the homomorphic encryption
-        pk, sk = PaillierKeypair.generate_keypair(1024)    
-        init_model = model_select(self.model_name).to(device)
-        if self.clip is None:
+        pk, sk = PaillierKeypair.generate_keypair(1024)
+        paillier = Paillier(pk, sk)
+        init_model = model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device)
+        if not hasattr(self, 'clip'):
             self.clip = {key: 1 for key in init_model.state_dict().keys()}
+            
         w_init = {key: value.flatten() for key, value in init_model.state_dict().items()}
-        for base in basis:
+        
+        for clip in clips:
             FedClient.count = 0
-            logger.debug(f"Start the experiment at base '{base}'")
+            logger.debug(f"Start the experiment at clip threshold scale '{clip}'")
             # create models and initialize loacl models with global model
-            local_models = [model_select(self.model_name).to(device) for _ in range(self.n_client)]
+            local_models = [model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device) for _ in range(self.n_client)]
             for model in local_models:
                 model.load_state_dict(init_model.state_dict())
                 
@@ -200,9 +102,8 @@ class Experiment:
                 'n_dataset': len(partition[i].dataset),
                 'epsilon': self.epsilon,
                 'delta': self.delta,
-                'clip_thr': self.clip,
+                'clip_thr': {key: value * clip for key, value in self.clip.items()},
             } for i in range(self.n_client)]
-            dp_list = [VanillaDp(dp_args[i]) for i in range(self.n_client)]
             paillier_dp = [PaillierDp(pk, sk, None, dp_args[i]) for i in range(self.n_client)]
             
             
@@ -216,43 +117,275 @@ class Experiment:
                 ),
                 {'epoch': self.n_epoch, 'test': False, 'log': False},
                 testloader,
-                paillier_dp[i]
+                paillier_dp[i] 
             ) for i in range(self.n_client)]
                 
-            loss, acc = fed_train(clients, self.n_round, rate, w_init, partition.freq, vote=base)
+            time_start = time.time()
+            init_idcs = {}
+            for key, value in w_init.items():
+                init_idcs[key] = torch.randperm(len(value))[:math.ceil(rate * len(value))]
+            # print(init_idcs)
+            loss, acc = fed_train(clients, self.n_round, rate, init_idcs, partition.freq)
+            time_rec.append(time.time() - time_start)
             loss_rec.append(loss), acc_rec.append(acc)
-        return loss_rec, acc_rec
+        return loss_rec, acc_rec, time_rec
+    
+    def run_by_rates(self, rates: list, repeat: int):
+        results = {}
+        loss_rec, acc_rec = [], []
+        time_rec = []
+        # set up the experiment
+        dataset = Datasets(self.dataset_name)
+        n_client = self.n_client
+        n_round = self.n_round
+        n_epoch = self.n_epoch
+        privacy_budget = self.epsilon
+        privacy_relax = self.delta
+        lr = self.lr
+        # HE rates: 0 for all DP, 1 for all HE, and other values for mixed
+
+        # partition the dataset
+        
+        if os.path.exists(f"./temp/{self.dataset_name}-{repeat}.npy"):
+            partition = DataPartitioner(
+                dataset.train,
+                'load',
+                n_client,
+                {'show': False, 'alpha': self.args.alpha, 'batch_size': 64, 'num_workers': 2, 'load': f"./temp/{self.dataset_name}-{repeat}.npy"}
+            )
+        else:
+            partition = DataPartitioner(
+                dataset.train,
+                self.args.partition,
+                n_client,
+                {'show': False, 'alpha': self.args.alpha, 'batch_size': 64, 'num_workers': 2, 'save': f"./temp/{self.dataset_name}-{repeat}.npy"}
+            )
+        testloader = DataLoader(dataset.test, batch_size=64)
         
 
-def config_thresholds(model_name: str, n_client: int, n_round: int, n_epoch: int, partition: DataPartitioner, rates: list):
-    model = model_select(model_name).to(device)
-    keys = model.state_dict().keys()
+        # set up the arguments for the homomorphic encryption
+        pk, sk = PaillierKeypair.generate_keypair(1024)
+        paillier = Paillier(pk, sk)
+        
+        init_model = model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device)
+        
+        if not hasattr(self, 'clip'):
+            self.clip = {key: 1 for key in init_model.state_dict().keys()}
+            
+        w_init = {key: value.flatten() for key, value in init_model.state_dict().items()}
+        for rate in rates:
+            FedClient.count = 0
     
-    thresholds = {rate: [
-        {key: 0.0 for key in keys} for _ in range(n_client)
-    ] for rate in rates}
+
+            logger.debug(f"Start the experiment at HE rates {rate*100}%")
+            # create models and initialize local models with global model
+            local_models = [
+                model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device)
+                for _ in range(n_client)]
+            for model in local_models:
+                model.load_state_dict(init_model.state_dict())
+                
+            if rate != 1:
+                dp_args = [{
+                    'n_aggr': n_round,
+                    'n_dataset': len(partition[i].dataset),
+                    'epsilon': privacy_budget,
+                    'delta': privacy_relax,
+                    'clip_thr': self.clip,
+                } for i in range(n_client)]
+                dp_list = [VanillaDp(dp_args[i]) for i in range(n_client)]
+                paillier_dp = [PaillierDp(pk, sk, None, dp_args[i]) for i in range(n_client)]
+            
+            # create clients by HE rates
+            if rate == 0:
+                clients = [FedClient(
+                    local_models[i],
+                    Trainer(
+                        local_models[i],
+                        partition[i],
+                        nn.CrossEntropyLoss().to(device),
+                        {'lr': lr}
+                    ),
+                    {'epoch': n_epoch, 'test': self.test_client, 'log': self.log_client},
+                    testloader,
+                    dp_list[i]
+                ) for i in range(n_client)]
+            elif rate == 1:
+                w_init = paillier(w_init)
+                clients = [FedClient(
+                    local_models[i],
+                    Trainer(
+                        local_models[i],
+                        partition[i],
+                        nn.CrossEntropyLoss().to(device),
+                        {'lr': lr}
+                    ),
+                    {'epoch': n_epoch, 'test': self.test_client, 'log': self.log_client},
+                    testloader,
+                    paillier
+                ) for i in range(n_client)]
+            else:
+                clients = [FedClient(
+                    local_models[i],
+                    Trainer(
+                        local_models[i],
+                        partition[i],
+                        nn.CrossEntropyLoss().to(device),
+                        {'lr': lr}
+                    ),
+                    {'epoch': n_epoch, 'test': self.test_client, 'log': self.log_client},
+                    testloader,
+                    paillier_dp[i]
+                ) for i in range(n_client)]
+                
+            time_start = time.time()
+            loss, acc = fed_train(clients, n_round, rate, w_init, partition.freq)
+            time_rec.append(time.time() - time_start)
+            loss_rec.append(loss), acc_rec.append(acc)
+        return loss_rec, acc_rec, time_rec
+        
+    def run_by_basis(self, basis: list, rate: float, repeat: int):
+        results = {}
+        loss_rec, acc_rec, time_rec = [], [], []
+        # set up the experiment
+        dataset = Datasets(self.dataset_name)
+
+        if os.path.exists(f"./temp/{self.dataset_name}-{repeat}.npy"):
+            partition = DataPartitioner(
+                dataset.train,
+                'load',
+                self.n_client,
+                {'show': False, 'alpha': self.args.alpha, 'batch_size': 64, 'num_workers': 2, 'load': f"./temp/{self.dataset_name}-{repeat}.npy"}
+            )
+        else:
+            partition = DataPartitioner(
+                dataset.train,
+                self.args.partition,
+                self.n_client,
+                {'show': False, 'alpha': self.args.alpha, 'batch_size': 64, 'num_workers': 2, 'save': f"./temp/{self.dataset_name}-{repeat}.npy"}
+            )
+
+        testloader = DataLoader(dataset.test, batch_size=64)
+            
+        
+        # set up the arguments for the homomorphic encryption
+        pk, sk = PaillierKeypair.generate_keypair(1024)    
+        init_model = model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device)
+        if not hasattr(self, 'clip'):
+            self.clip = {key: 1 for key in init_model.state_dict().keys()}
+        w_init = {key: value.flatten() for key, value in init_model.state_dict().items()}
+        for base in basis:
+            FedClient.count = 0
+            logger.debug(f"Start the experiment at base '{base}'")
+            # create models and initialize loacl models with global model
+            local_models = [model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device) for _ in range(self.n_client)]
+            for model in local_models:
+                model.load_state_dict(init_model.state_dict())
+                
+            dp_args = [{
+                'n_aggr': self.n_round,
+                'n_dataset': len(partition[i].dataset),
+                'epsilon': self.epsilon,
+                'delta': self.delta,
+                'clip_thr': self.clip,
+            } for i in range(self.n_client)]
+            paillier_dp = [PaillierDp(pk, sk, None, dp_args[i]) for i in range(self.n_client)]
+            
+            
+            clients = [FedClient(
+                local_models[i],
+                Trainer(
+                    local_models[i],
+                    partition[i],
+                    nn.CrossEntropyLoss().to(device),
+                    {'lr': self.lr}
+                ),
+                {'epoch': self.n_epoch, 'test': False, 'log': False},
+                testloader,
+                paillier_dp[i] 
+            ) for i in range(self.n_client)]
+                
+            time_start = time.time()
+            init_idcs = {}
+            for key, value in w_init.items():
+                init_idcs[key] = torch.randperm(len(value))[:math.ceil(rate * len(value))]
+            # print(init_idcs)
+            loss, acc = fed_train(clients, self.n_round, rate, init_idcs, partition.freq, vote=base)
+            time_rec.append(time.time() - time_start)
+            loss_rec.append(loss), acc_rec.append(acc)
+        return loss_rec, acc_rec, time_rec
     
-    clients = [FedClient(
-        model,
-        Trainer(
-            model,
-            partition[i],
-            nn.CrossEntropyLoss().to(device),
-            {'lr': 0.01}
-        ),
-        {'epoch': n_epoch, 'test': False, 'log': False},
-    ) for i in range(n_client)]
-    
-    for t in range(n_round):
-        for client in clients:
-            client.train_update()
-            update = client.get_raw_update()
-            for rate in rates:
-                for key in keys:
-                    data = update[key].to('cpu')
-                    thresholds[rate][client.id][key] += get_bottom_k_norm(data, math.floor((1 - rate) * len(data))) / n_round
-        logger.debug(f"Tuning C: Round {t} is done.")
-    return thresholds
+    def run_by_dists(self, dists: list, rate: float):
+        loss_rec, acc_rec, time_rec = [], [], []
+        dataset = Datasets(self.dataset_name)
+        pk, sk = PaillierKeypair.generate_keypair(1024)    
+        init_model = model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device)
+        if not hasattr(self, 'clip'):
+            self.clip = {key: 1.2 for key in init_model.state_dict().keys()}
+        w_init = {key: value.flatten() for key, value in init_model.state_dict().items()}
+        testloader = DataLoader(dataset.test, batch_size=64)
+        for dist in dists:
+            FedClient.count = 0
+            logger.debug(f"Start the experiment at distribution '{dist}'")
+            if dist == 'iid':
+                partition = DataPartitioner(
+                    dataset.train,
+                    'iid',
+                    self.n_client,
+                    {'show': True, 'batch_size': 64, 'num_workers': 2}
+                )
+            elif dist == 'pathetic':
+                partition = DataPartitioner(
+                    dataset.train,
+                    'pathetic',
+                    self.n_client,
+                    {'show': True, 'batch_size': 64, 'num_workers': 2}
+                )
+            else:
+                partition = DataPartitioner(
+                    dataset.train,
+                    'dirichlet',
+                    self.n_client,
+                    {'show': True, 'alpha': float(dist), 'batch_size': 64, 'num_workers': 2}
+                )
+                
+            # create models and initialize loacl models with global model
+            local_models = [model_select(self.model_name, num_classes=num_classes[self.dataset_name]).to(device) for _ in range(self.n_client)]
+            for model in local_models:
+                model.load_state_dict(init_model.state_dict())
+                
+            dp_args = [{
+                'n_aggr': self.n_round,
+                'n_dataset': len(partition[i].dataset),
+                'epsilon': self.epsilon,
+                'delta': self.delta,
+                'clip_thr': self.clip,
+            } for i in range(self.n_client)]
+            paillier_dp = [PaillierDp(pk, sk, None, dp_args[i]) for i in range(self.n_client)]
+            
+            
+            clients = [FedClient(
+                local_models[i],
+                Trainer(
+                    local_models[i],
+                    partition[i],
+                    nn.CrossEntropyLoss().to(device),
+                    {'lr': self.lr}
+                ),
+                {'epoch': self.n_epoch, 'test': False, 'log': False},
+                testloader,
+                paillier_dp[i] 
+            ) for i in range(self.n_client)]
+                
+            time_start = time.time()
+            init_idcs = {}
+            for key, value in w_init.items():
+                init_idcs[key] = torch.randperm(len(value))[:math.ceil(rate * len(value))]
+            # print(init_idcs)
+            loss, acc = fed_train(clients, self.n_round, rate, init_idcs, partition.freq)
+            time_rec.append(time.time() - time_start)
+            loss_rec.append(loss), acc_rec.append(acc)
+        return loss_rec, acc_rec, time_rec
 
 def fed_train(clients: list[FedClient], n_round: int, he_rate: float, init_he_idcs: dict, freq: dict, vote: str="best"):
     """
@@ -293,15 +426,15 @@ def fed_train(clients: list[FedClient], n_round: int, he_rate: float, init_he_id
                 
                 # aggregate the voting results
                 idcs_glob = aggregate_votes(top_idcs)
-            else:
+            elif vote != "global":
                 idcs_glob = {}
                 update = clients[0].get_raw_update()
                 for key, value in update.items():
-                    idcs_glob[key] = torch.LongTensor(random.choices(range(len(value)), k=math.ceil(he_rate * len(value))))
-        
+                    idcs_glob[key] = torch.randperm(len(value))[:math.ceil(he_rate * len(value))]
             # apply voting results to the clients
             for client in clients:
-                client.protector.he_idcs = idcs_glob
+                if vote != "global":
+                    client.protector.he_idcs = idcs_glob
                 he_update, dp_update = client.get_update()
                 he_updates.append(he_update), dp_updates.append(dp_update)
             
@@ -321,7 +454,7 @@ def fed_train(clients: list[FedClient], n_round: int, he_rate: float, init_he_id
             updates_glob = aggregate_updates(updates, freq)
             
             for client in clients:
-                client.apply_updates(updates_glob)
+                client.apply_updates(updates_glob, replace_idcs=(vote=="global"), he_frac=he_rate)
             
         # test the new global model and record the loss and accuracy
         loss, acc = clients[0].log_test(t)

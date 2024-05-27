@@ -106,6 +106,7 @@ class FedClient:
             tops = {}
             for key, value in updates.items():
                 tops[key] = get_top_k_idcs(value, math.ceil(he_frac * len(value)))
+            self.protector.he_idcs = tops
             
         updates = {
             key: value.reshape(state[key].shape) + state[key]
